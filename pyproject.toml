@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crow_security_ng"
-version = "0.1.1"
+version = "0.1.4"
 description = "A modern Python library for the Crow Cloud API - Next Generation"
 readme = "README.md"
 license = {text = "MIT"}
