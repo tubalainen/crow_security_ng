@@ -22,7 +22,7 @@ from .utils import normalize_mac
 _LOGGER = logging.getLogger(__name__)
 
 # API Configuration
-DEFAULT_API_BASE = "https://api.crowcloud.com"
+DEFAULT_API_BASE = "https://api.crowcloud.xyz"
 DEFAULT_TIMEOUT = 30
 DEFAULT_RETRY_COUNT = 3
 DEFAULT_RETRY_DELAY = 1.0
