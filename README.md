@@ -1,26 +1,37 @@
 # Crow Security NG
 
-A modern, async Python library for the Crow Cloud API - Next Generation.
+A modern, async Python library for the Crow Cloud API — Next Generation.
 
-This library provides a clean, type-hinted interface for interacting with Crow Security alarm systems (Shepherd panels) through the Crow Cloud API.
+Provides a clean, type-hinted interface for interacting with Crow Shepherd alarm panels
+through the Crow Cloud API at `api.crowcloud.xyz`.
 
 ## Features
 
-- **Fully async** - Built on `aiohttp` for efficient async I/O
-- **Type hints** - Complete type annotations for better IDE support
-- **Modern Python** - Requires Python 3.10+, uses dataclasses and enums
-- **Proper error handling** - Dedicated exception classes for different error types
-- **MAC address normalization** - Accepts any MAC format (with/without separators)
-- **WebSocket support** - Real-time updates from your alarm panel
-- **Backwards compatible** - Provides `Session` class compatible with original `crow_security`
-- **Retry logic** - Automatic retries with exponential backoff
-- **Context managers** - Proper resource cleanup with async context managers
+- **Fully async** — built on `aiohttp` for efficient async I/O
+- **Type hints** — complete type annotations for better IDE support
+- **Modern Python** — requires Python 3.10+, uses dataclasses and enums
+- **Proper error handling** — dedicated exception classes for different error types
+- **MAC address normalization** — accepts any MAC format (with/without separators)
+- **WebSocket support** — real-time updates from your alarm panel
+- **Backwards compatible** — provides a `Session` class compatible with the original `crow_security`
+- **Token refresh** — automatic OAuth2 token refresh with fallback to full re-login
+- **Context managers** — proper resource cleanup with async context managers
 
 ## Installation
 
 ```bash
 pip install crow_security_ng
 ```
+
+## Authentication
+
+The library uses **OAuth2 Resource Owner Password Credentials** (ROPC) against
+`https://api.crowcloud.xyz/o/token/`. Application credentials (`CLIENT_ID` and
+`CLIENT_SECRET`) are embedded in the library — you only need your Crow Cloud
+email and password.
+
+The access token is sent as `Authorization: Bearer {token}` on every request.
+The library refreshes expired tokens automatically.
 
 ## Quick Start
 
@@ -31,46 +42,17 @@ import asyncio
 from crow_security_ng import Session
 
 async def main():
-    # Create a session
-    session = Session("your-email@example.com", "your-password")
-    
-    # Get your panel (MAC address can be in any format)
-    panel = await session.get_panel("AABBCCDDEEFF")
-    # or: await session.get_panel("AA:BB:CC:DD:EE:FF")
-    # or: await session.get_panel("aa-bb-cc-dd-ee-ff")
-    
-    print(f"Panel: {panel.name}")
-    
-    # Get alarm areas
-    areas = await panel.get_areas()
-    for area in areas:
-        print(f"Area: {area.name}, State: {area.state}")
-    
-    # Arm the alarm
-    await panel.set_area_state(areas[0].id, "arm")
-    
-    # Get zones
-    zones = await panel.get_zones()
-    for zone in zones:
-        print(f"Zone: {zone.name}, Open: {zone.is_open}")
-    
-    # Clean up
-    await session.close()
-
-asyncio.run(main())
-```
-
-### Using Context Manager
-
-```python
-import asyncio
-from crow_security_ng import Session
-
-async def main():
-    async with Session("email@example.com", "password") as session:
+    async with Session("your-email@example.com", "your-password") as session:
         panel = await session.get_panel("AABBCCDDEEFF")
+        print(f"Panel: {panel.name}  (id={panel.id})")
+
         areas = await panel.get_areas()
-        print(areas)
+        for area in areas:
+            print(f"  Area: {area.name}, State: {area.state.value}")
+
+        zones = await panel.get_zones()
+        for zone in zones:
+            print(f"  Zone: {zone.name}, Open: {zone.is_open}")
 
 asyncio.run(main())
 ```
@@ -82,26 +64,25 @@ import asyncio
 from crow_security_ng import CrowClient
 
 async def main():
-    async with CrowClient(
-        email="email@example.com",
-        password="password",
-        timeout=60,
-        retry_count=5,
-    ) as client:
-        # Get all panels
+    async with CrowClient(email="email@example.com", password="password") as client:
         panels = await client.get_panels()
-        
-        # Work with a specific panel
-        panel = await client.get_panel("AABBCCDDEEFF")
-        
-        # Control outputs
-        outputs = await client.get_outputs(panel.mac)
-        await client.set_output_state(panel.mac, outputs[0].id, True)
-        
-        # Get measurements (temperature, humidity, etc.)
-        measurements = await client.get_measurements(panel.mac)
-        for m in measurements:
-            print(f"{m.name}: {m.value} {m.unit}")
+        panel = panels[0]
+        print(f"Panel: {panel.name}, id={panel.id}, mac={panel.mac}")
+
+        # Sub-resources use the numeric panel.id — not the MAC
+        areas = await client.get_areas(panel.id)
+        zones = await client.get_zones(panel.id)
+        outputs = await client.get_outputs(panel.id)
+
+        # Arm an area (sends X-Crow-CP-Remote header automatically via Panel.set_area_state)
+        area = await panel.set_area_state(areas[0].id, "arm")
+        print(f"Armed: {area.is_armed}")
+
+        # Control an output
+        await client.set_output_state(
+            panel.id, outputs[0].id, True,
+            remote_password=panel.remote_access_password,
+        )
 
 asyncio.run(main())
 ```
@@ -113,14 +94,13 @@ import asyncio
 from crow_security_ng import Session
 
 async def handle_message(msg: dict):
-    print(f"Received: {msg}")
+    print(f"Event: {msg}")
 
 async def main():
-    session = Session("email@example.com", "password")
-    panel = await session.get_panel("AABBCCDDEEFF")
-    
-    # This will run indefinitely, receiving real-time updates
-    await session.ws_connect(panel.mac, handle_message)
+    async with Session("email@example.com", "password") as session:
+        panel = await session.get_panel("AABBCCDDEEFF")
+        # Runs indefinitely, calling handle_message for every event
+        await session.ws_connect(panel.mac, handle_message)
 
 asyncio.run(main())
 ```
@@ -129,73 +109,129 @@ asyncio.run(main())
 
 ### Session
 
-The `Session` class provides a simple interface compatible with the original `crow_security` library.
+Simple interface compatible with the original `crow_security` library.
 
 ```python
 session = Session(email, password)
-panel = await session.get_panel(mac)
+panel   = await session.get_panel(mac)   # MAC in any format
+panels  = await session.get_panels()
+await session.ws_connect(mac, callback)
 await session.close()
 ```
 
 ### CrowClient
 
-The `CrowClient` class provides full access to all API features.
+Full access to all API features.
 
 ```python
 client = CrowClient(
     email="...",
     password="...",
-    api_base="https://api.crowcloud.com",  # optional
-    timeout=30,  # optional
-    retry_count=3,  # optional
+    timeout=30,       # optional, default 30 s
 )
+```
+
+All sub-resource methods take the **numeric panel ID** (not MAC):
+
+```python
+await client.get_areas(panel_id)
+await client.get_area(panel_id, area_id)
+await client.set_area_state(panel_id, area_id, state, force=False,
+                             remote_password=..., user_code=...)
+
+await client.get_zones(panel_id)
+await client.get_zone(panel_id, zone_id)
+await client.set_zone_bypass(panel_id, zone_id, bypass,
+                              remote_password=..., user_code=...)
+
+await client.get_outputs(panel_id)
+await client.get_output(panel_id, output_id)
+await client.set_output_state(panel_id, output_id, state,
+                               remote_password=..., user_code=...)
+
+await client.get_measurements(panel_id)
+await client.get_zone_pictures(panel_id, zone_id)
+await client.capture_picture(panel_id, zone_id, remote_password=..., user_code=...)
+await client.download_picture(picture, "/path/to/file.jpg")
 ```
 
 ### Models
 
 #### Panel
 ```python
-panel.mac          # MAC address
-panel.name         # Panel name
-panel.model        # Panel model
-panel.firmware_version  # Firmware version
+panel.mac                      # 12-char hex MAC (lookup + WebSocket subscribe)
+panel.id                       # numeric database ID (sub-resource URLs)
+panel.name
+panel.remote_access_password   # → X-Crow-CP-Remote header
+panel.user_code                # → X-Crow-CP-User header (may be None)
+panel.firmware_version
+```
+
+Panel also exposes convenience delegation methods:
+```python
+areas = await panel.get_areas()
+await panel.set_area_state(area_id, "arm")
+zones = await panel.get_zones()
+await panel.set_zone_bypass(zone_id, True)
+outputs = await panel.get_outputs()
+await panel.set_output_state(output_id, True)
+measurements = await panel.get_measurements()
+pictures = await panel.get_zone_pictures(zone_id)
+await panel.capture_picture(zone_id)
 ```
 
 #### Area
 ```python
-area.id            # Area ID
-area.name          # Area name
-area.state         # AreaState enum
-area.is_armed      # True if armed
-area.is_arming     # True if arming in progress
+area.id
+area.name
+area.state          # AreaState enum
+area.is_armed       # True if ARMED or STAY_ARMED
+area.is_arming      # True if ARM_IN_PROGRESS or STAY_ARM_IN_PROGRESS
+area.exit_delay
+area.ready_to_arm
+area.zone_alarm
 ```
 
 #### Zone
 ```python
-zone.id            # Zone ID
-zone.name          # Zone name
-zone.state         # Zone state string
-zone.zone_type     # Zone type
-zone.is_open       # True if triggered/open
-zone.battery       # Battery level (0-100)
-zone.has_low_battery  # True if battery < 20%
+zone.id
+zone.name
+zone.state          # bool — True = open/triggered
+zone.bypass         # True if bypassed
+zone.battery_low    # True if low battery
+zone.tamper_alarm
+zone.zone_type      # int (55 = smart cam)
+zone.is_open        # True if state or active
+zone.has_low_battery
 ```
 
 #### Output
 ```python
-output.id          # Output ID
-output.name        # Output name
-output.state       # True if on
-output.output_type # Output type
+output.id
+output.name
+output.state        # bool — True = on
+output.tamper_alarm
+output.battery_low
 ```
 
 #### Measurement
 ```python
-measurement.id     # Measurement ID
-measurement.name   # Measurement name
-measurement.value  # Current value
-measurement.unit   # Unit (°C, %, etc.)
-measurement.measurement_type  # Type (temperature, humidity, etc.)
+measurement.device_id
+measurement.dect_interface   # 32533=temp, 32532=humidity, 32535=pressure, 61=gas
+measurement.temperature      # °C  (raw API value ÷ 1000)
+measurement.humidity         # %RH (raw API value ÷ 1000)
+measurement.air_pressure     # atm (raw API value ÷ 1000)
+measurement.gas_level        # 0-4 scale
+```
+
+#### Picture
+```python
+picture.id
+picture.zone          # zone ID
+picture.zone_name
+picture.url           # pre-signed download URL (no auth needed)
+picture.picture_type  # 0 = manual, 1 = alarm-triggered
+picture.created       # datetime
 ```
 
 ### Exceptions
@@ -203,18 +239,20 @@ measurement.measurement_type  # Type (temperature, humidity, etc.)
 ```python
 from crow_security_ng import (
     CrowError,           # Base exception
-    AuthenticationError, # Invalid credentials
-    ConnectionError,     # Connection failed
-    ResponseError,       # API error response
-    PanelNotFoundError,  # Panel not found
-    RateLimitError,      # Rate limit exceeded
-    TimeoutError,        # Request timeout
+    AuthenticationError, # OAuth2 login failed / credentials rejected
+    ConnectionError,     # Network-level failure
+    ResponseError,       # Unexpected HTTP error (status_code, response_text attrs)
+    PanelNotFoundError,  # Panel MAC not found (mac attr)
+    RateLimitError,      # HTTP 429 (retry_after attr)
+    TimeoutError,        # Request timed out
+    InvalidMacError,     # Malformed MAC address (mac attr)
+    WebSocketError,      # WebSocket auth or subscribe failure
 )
 ```
 
 ## Migrating from crow_security
 
-This library is designed to be a drop-in replacement for `crow_security`. Simply change your import:
+Change your import — everything else stays the same:
 
 ```python
 # Before
@@ -226,27 +264,32 @@ from crow_security_ng import Session
 session = Session(email, password)
 ```
 
-### Key improvements over crow_security
+### Key differences
 
-1. **Better exception handling** - Specific exception classes instead of generic `ResponseError`
-2. **MAC address normalization** - No need to manually format MAC addresses
-3. **Type hints** - Full type annotations for better IDE support
-4. **Dataclass models** - Structured data models instead of raw dictionaries
-5. **Resource cleanup** - Proper async context manager support
-6. **Retry logic** - Automatic retries with configurable backoff
-7. **Modern Python** - Uses Python 3.10+ features
+| | crow_security 0.3.0 | crow_security_ng |
+|---|---|---|
+| Return types | Raw `dict` | Typed dataclass objects |
+| `panel.id` | Present | Present — **used for all sub-resource URLs** |
+| `Zone.state` | Mixed | `bool` (True = open) |
+| Exceptions | `CrowLoginError`, `ResponseError` | Richer hierarchy |
+| Type hints | None | Full Python 3.10+ annotations |
+| Token refresh | Manual | Automatic on 401 |
+| Context manager | Partial (bug in `__aexit__`) | Full async context manager |
+| Python version | 3.2+ | 3.10+ |
+
+Backward-compatibility aliases are provided so existing exception handlers continue to work:
+- `CrowSecurityError` → `CrowError`
+- `CrowSecurityAuthenticationError` → `AuthenticationError`
+- `CrowSecurityConnectionError` → `ConnectionError`
+- `CrowSecurityClient` → `CrowClient`
 
 ## Home Assistant Integration
 
-This library is designed to work with the Crow Shepherd Home Assistant integration. See the integration documentation for setup instructions.
+This library is designed to work with the Crow Shepherd Home Assistant integration.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Credits
 
