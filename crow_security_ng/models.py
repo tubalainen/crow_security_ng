@@ -110,6 +110,7 @@ class Zone:
     state: bool = False         # boolean — True means open/triggered
     bypass: bool = False
     battery_low: bool = False
+    battery_voltage: float | None = None    # V  (raw API millivolts ÷ 1000; None if wired/absent)
     tamper_alarm: bool = False
     zone_type: int = 0          # numeric zone type (55 = smart cam)
     active: bool = False
@@ -132,6 +133,7 @@ class Zone:
         else:
             state = False
 
+        _batt = data.get("battery")
         return cls(
             id=int(zone_id),
             name=data.get("name", f"Zone {zone_id}"),
@@ -139,6 +141,7 @@ class Zone:
             state=state,
             bypass=data.get("bypass", False) or False,
             battery_low=data.get("battery_low", False) or False,
+            battery_voltage=float(_batt) / 1000.0 if _batt else None,
             tamper_alarm=data.get("tamper_alarm", False) or False,
             zone_type=int(data.get("zone_type", 0) or 0),
             active=data.get("active", False) or False,
@@ -171,6 +174,7 @@ class Output:
     state: bool = False
     tamper_alarm: bool = False
     battery_low: bool = False
+    battery_voltage: float | None = None    # V  (raw API millivolts ÷ 1000; None if wired/absent)
     output_type: int | None = None
     rssi: int | None = None
     raw_data: dict[str, Any] = field(default_factory=dict)
@@ -190,6 +194,7 @@ class Output:
         else:
             state = False
 
+        _batt = data.get("battery")
         return cls(
             id=int(output_id),
             name=data.get("name", f"Output {output_id}"),
@@ -197,6 +202,7 @@ class Output:
             state=state,
             tamper_alarm=data.get("tamper_alarm", False) or False,
             battery_low=data.get("battery_low", False) or False,
+            battery_voltage=float(_batt) / 1000.0 if _batt else None,
             output_type=data.get("output_type") or data.get("type"),
             rssi=data.get("rssi"),
             raw_data=data,

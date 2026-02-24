@@ -91,6 +91,18 @@ class TestZone:
         zone = Zone.from_api(data)
         assert zone.raw_data["custom_field"] == "value"
 
+    def test_battery_voltage_millivolts(self):
+        zone = Zone.from_api({"id": 10, "name": "T", "battery": 2796})
+        assert zone.battery_voltage == pytest.approx(2.796)
+
+    def test_battery_voltage_zero_is_none(self):
+        zone = Zone.from_api({"id": 11, "name": "T", "battery": 0})
+        assert zone.battery_voltage is None
+
+    def test_battery_voltage_absent_is_none(self):
+        zone = Zone.from_api({"id": 12, "name": "T"})
+        assert zone.battery_voltage is None
+
 
 # ---------------------------------------------------------------------------
 # Area
@@ -162,6 +174,14 @@ class TestOutput:
     def test_default_state_false(self):
         output = Output.from_api({"id": 4, "name": "T"})
         assert output.state is False
+
+    def test_battery_voltage(self):
+        output = Output.from_api({"id": 5, "name": "Siren", "battery": 3330})
+        assert output.battery_voltage == pytest.approx(3.330)
+
+    def test_battery_voltage_zero_is_none(self):
+        output = Output.from_api({"id": 6, "name": "Lock", "battery": 0})
+        assert output.battery_voltage is None
 
 
 # ---------------------------------------------------------------------------
