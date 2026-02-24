@@ -159,6 +159,11 @@ class Zone:
         """True if zone has a low battery condition."""
         return self.battery_low
 
+    @property
+    def is_camera(self) -> bool:
+        """True if this zone is a smart-cam (zone_type == 55)."""
+        return self.zone_type == 55
+
 
 # ---------------------------------------------------------------------------
 # Output
@@ -505,3 +510,7 @@ class Panel:
             remote_password=self.remote_access_password,
             user_code=self.user_code,
         )
+
+    async def get_picture_bytes(self, picture: "Picture") -> bytes:
+        """Fetch a picture as raw JPEG bytes (for HA camera entities)."""
+        return await self._require_client().get_picture_bytes(picture)

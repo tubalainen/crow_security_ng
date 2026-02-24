@@ -12,7 +12,7 @@ from crow_security_ng.exceptions import (
     RateLimitError,
     ResponseError,
 )
-from crow_security_ng.models import Area, AreaState, Output, Panel, Zone
+from crow_security_ng.models import Area, AreaState, Output, Panel, Picture, Zone
 
 
 # ---------------------------------------------------------------------------
@@ -282,3 +282,63 @@ class TestTokenRefresh:
                 panels = await client.get_panels()
 
         assert len(panels) == 1
+
+
+# ---------------------------------------------------------------------------
+# Pictures / camera snapshots
+# ---------------------------------------------------------------------------
+
+class TestPictures:
+    """Tests for picture/camera methods."""
+
+    @pytest.mark.asyncio
+    async def test_get_zone_pictures(self):
+        pictures_payload = {
+            "results": [
+                {
+                    "id": 1,
+                    "zone": 7,
+                    "zone_name": "cam hall ov",
+                    "url": "https://s3.example.com/pic1.jpg",
+                    "key": "abc",
+                }
+            ]
+        }
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(f"{BASE_URL}/o/token/", payload=TOKEN_RESPONSE)
+                m.get(f"{BASE_URL}/panels/42/zones/7/pictures/?page=1&page_size=10", payload=pictures_payload)
+                pics = await client.get_zone_pictures(42, 7)
+
+        assert len(pics) == 1
+        assert pics[0].id == 1
+        assert pics[0].url == "https://s3.example.com/pic1.jpg"
+
+    @pytest.mark.asyncio
+    async def test_capture_picture(self):
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(f"{BASE_URL}/o/token/", payload=TOKEN_RESPONSE)
+                m.post(f"{BASE_URL}/panels/42/zones/7/pictures/", status=204)
+                await client.capture_picture(42, 7, remote_password="secret")
+
+    @pytest.mark.asyncio
+    async def test_get_picture_bytes(self):
+        pic = Picture(id=1, zone=7, url="https://s3.example.com/pic1.jpg")
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.get("https://s3.example.com/pic1.jpg", body=b"\xff\xd8\xff")
+                data = await client.get_picture_bytes(pic)
+
+        assert data == b"\xff\xd8\xff"
+
+    @pytest.mark.asyncio
+    async def test_download_picture(self, tmp_path):
+        pic = Picture(id=2, zone=7, url="https://s3.example.com/pic2.jpg")
+        out = tmp_path / "pic.jpg"
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.get("https://s3.example.com/pic2.jpg", body=b"\xff\xd8\xff\xe0")
+                await client.download_picture(pic, str(out))
+
+        assert out.read_bytes() == b"\xff\xd8\xff\xe0"

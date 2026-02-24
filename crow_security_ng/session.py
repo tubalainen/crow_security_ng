@@ -125,6 +125,21 @@ class Session:
         client = self._get_client()
         await client.ws_connect(mac, callback)
 
+    async def get_picture_bytes(self, picture: Picture) -> bytes:
+        """
+        Fetch a picture as raw JPEG bytes.
+
+        Use this for HA camera entities where async_camera_image must return bytes.
+
+        Args:
+            picture: Picture object (from panel.get_zone_pictures()).
+
+        Returns:
+            Raw JPEG bytes.
+        """
+        client = self._get_client()
+        return await client.get_picture_bytes(picture)
+
     async def download_picture(self, picture: Picture, path: str) -> None:
         """
         Download a picture to a local file.
