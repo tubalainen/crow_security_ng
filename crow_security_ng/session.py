@@ -10,7 +10,7 @@ import logging
 from typing import Any, Callable
 
 from .client import CrowClient
-from .models import Panel
+from .models import Panel, Picture
 from .utils import normalize_mac
 
 _LOGGER = logging.getLogger(__name__)
@@ -115,16 +115,27 @@ class Session:
     ) -> None:
         """
         Connect to WebSocket for real-time updates.
-        
+
         This provides the same interface as crow_security.Session.ws_connect.
-        
+
         Args:
             mac: Panel MAC address.
             callback: Callback function for WebSocket messages.
         """
         client = self._get_client()
         await client.ws_connect(mac, callback)
-    
+
+    async def download_picture(self, picture: Picture, path: str) -> None:
+        """
+        Download a picture to a local file.
+
+        Args:
+            picture: Picture object (from panel.get_zone_pictures()).
+            path: Local filesystem path to write the image to.
+        """
+        client = self._get_client()
+        await client.download_picture(picture, path)
+
     async def close(self) -> None:
         """Close the session and clean up resources."""
         if self._client:
