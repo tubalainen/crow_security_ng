@@ -43,7 +43,7 @@ from crow_security_ng import Session
 
 async def main():
     async with Session("your-email@example.com", "your-password") as session:
-        panel = await session.get_panel("0013A1250A45")
+        panel = await session.get_panel("AABBCCDDEEFF")
         print(f"Panel: {panel.name}  (id={panel.id})")
 
         areas = await panel.get_areas()
@@ -98,7 +98,7 @@ async def handle_message(msg: dict):
 
 async def main():
     async with Session("email@example.com", "password") as session:
-        panel = await session.get_panel("0013A1250A45")
+        panel = await session.get_panel("AABBCCDDEEFF")
         # Runs indefinitely, calling handle_message for every event
         await session.ws_connect(panel.mac, handle_message)
 
