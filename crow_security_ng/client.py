@@ -478,18 +478,26 @@ class CrowClient:
             extra_headers=_control_headers(remote_password, user_code),
         )
 
+    async def get_picture_bytes(self, picture: Picture) -> bytes:
+        """Fetch a picture and return raw JPEG bytes.
+
+        The picture URL is pre-signed — no Authorization header is sent.
+        Use this for HA camera entities (async_camera_image must return bytes).
+        """
+        session = self._get_session()
+        async with session.get(picture.url) as resp:
+            resp.raise_for_status()
+            return await resp.read()
+
     async def download_picture(self, picture: Picture, path: str) -> None:
         """Download a picture to a local file.
 
         The picture URL is pre-signed and does not require the Authorization
         header — it is fetched directly.
         """
-        session = self._get_session()
-        async with session.get(picture.url) as resp:
-            resp.raise_for_status()
-            with open(path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(8192):
-                    f.write(chunk)
+        data = await self.get_picture_bytes(picture)
+        with open(path, "wb") as f:
+            f.write(data)
 
     # ------------------------------------------------------------------
     # WebSocket  (real-time event stream)
