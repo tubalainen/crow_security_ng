@@ -25,7 +25,18 @@ from .exceptions import (
     TimeoutError,
     WebSocketError,
 )
-from .models import Area, Measurement, Output, Panel, Picture, Zone
+from .models import (
+    Area,
+    ConnectionInfo,
+    GsmInfo,
+    Measurement,
+    Output,
+    Panel,
+    Picture,
+    RadioInfo,
+    WifiInfo,
+    Zone,
+)
 from .utils import normalize_mac
 
 _LOGGER = logging.getLogger(__name__)
@@ -490,6 +501,77 @@ class CrowClient:
             for reading in data:
                 measurements.append(Measurement.from_api(reading))
         return measurements
+
+    # ------------------------------------------------------------------
+    # Connectivity endpoints (GET only; PUT/DELETE on /connection/ open
+    # and close a remote panel session and must not be called here)
+    # ------------------------------------------------------------------
+
+    async def _get_panel_resource(
+        self,
+        panel_id: int,
+        subpath: str,
+        remote_password: str | None,
+        user_code: str | None,
+    ) -> dict[str, Any]:
+        data = await self._request(
+            "get",
+            f"/panels/{panel_id}/{subpath}",
+            extra_headers=_control_headers(remote_password, user_code),
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def get_connection(
+        self,
+        panel_id: int,
+        remote_password: str | None = None,
+        user_code: str | None = None,
+    ) -> ConnectionInfo:
+        """GET /panels/{panel_id}/connection/"""
+        return ConnectionInfo.from_api(
+            await self._get_panel_resource(
+                panel_id, "connection/", remote_password, user_code
+            )
+        )
+
+    async def get_wifi_info(
+        self,
+        panel_id: int,
+        remote_password: str | None = None,
+        user_code: str | None = None,
+    ) -> WifiInfo:
+        """GET /panels/{panel_id}/module/wifi/info/"""
+        return WifiInfo.from_api(
+            await self._get_panel_resource(
+                panel_id, "module/wifi/info/", remote_password, user_code
+            )
+        )
+
+    async def get_gsm_info(
+        self,
+        panel_id: int,
+        remote_password: str | None = None,
+        user_code: str | None = None,
+    ) -> GsmInfo:
+        """GET /panels/{panel_id}/module/gsm/info/"""
+        return GsmInfo.from_api(
+            await self._get_panel_resource(
+                panel_id, "module/gsm/info/", remote_password, user_code
+            )
+        )
+
+    async def get_radio_info(
+        self,
+        panel_id: int,
+        remote_password: str | None = None,
+        user_code: str | None = None,
+    ) -> RadioInfo:
+        """GET /panels/{panel_id}/module/radio/info/"""
+        return RadioInfo.from_api(
+            await self._get_panel_resource(
+                panel_id, "module/radio/info/", remote_password, user_code
+            )
+        )
 
     # ------------------------------------------------------------------
     # Picture endpoints

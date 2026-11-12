@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -376,6 +376,115 @@ class Event:
         )
 
 
+def _parse_utc(value: Any) -> datetime | None:
+    """Parse an API timestamp that is UTC but sent without an offset."""
+    parsed = _parse_dt(value)
+    if parsed is not None and parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+# ---------------------------------------------------------------------------
+# Connectivity
+# ---------------------------------------------------------------------------
+# Network addresses, MACs and IMEI are deliberately not exposed as fields;
+# they remain available in raw_data.
+
+class ConnectionInterface(int, Enum):
+    """Interface the panel currently uses to reach Crow Cloud.
+
+    Only confirmed values are listed; anything else is kept as a raw int.
+    """
+
+    ETHERNET = 1
+
+
+@dataclass
+class ConnectionInfo:
+    """Current cloud connection state. GET /panels/{id}/connection/"""
+
+    connected: bool | None = None
+    interface: ConnectionInterface | int | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "ConnectionInfo":
+        raw_interface = data.get("interface")
+        interface: ConnectionInterface | int | None
+        try:
+            interface = ConnectionInterface(raw_interface)
+        except ValueError:
+            interface = raw_interface
+        return cls(
+            connected=data.get("connected"),
+            interface=interface,
+            raw_data=data,
+        )
+
+
+@dataclass
+class WifiInfo:
+    """Wi-Fi module state. GET /panels/{id}/module/wifi/info/"""
+
+    enabled: bool | None = None
+    rssi: int | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "WifiInfo":
+        rssi = data.get("rssi")
+        return cls(
+            enabled=data.get("enabled"),
+            rssi=rssi if rssi is not None else data.get("wifi_rssi"),
+            raw_data=data,
+        )
+
+
+@dataclass
+class GsmInfo:
+    """GSM module state. GET /panels/{id}/module/gsm/info/"""
+
+    enabled: bool | None = None
+    status: int | None = None
+    status_desc: str | None = None
+    rssi: int | None = None
+    provider: str | None = None
+    roaming: bool | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "GsmInfo":
+        rssi = data.get("rssi")
+        return cls(
+            enabled=data.get("enabled"),
+            status=data.get("status"),
+            status_desc=(data.get("status_desc") or "").strip() or None,
+            rssi=rssi if rssi is not None else data.get("mobile_rssi"),
+            provider=(data.get("provider") or "").strip() or None,
+            roaming=data.get("roaming"),
+            raw_data=data,
+        )
+
+
+@dataclass
+class RadioInfo:
+    """Wireless radio module state. GET /panels/{id}/module/radio/info/"""
+
+    failure: bool | None = None
+    software_version: str | None = None
+    hardware_version: str | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "RadioInfo":
+        return cls(
+            failure=data.get("failure"),
+            software_version=data.get("software_version"),
+            hardware_version=data.get("hardware_version"),
+            raw_data=data,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Panel
 # ---------------------------------------------------------------------------
@@ -401,8 +510,17 @@ class Panel:
     firmware_version: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    last_report_heartbeat: datetime | None = None
+    report_heartbeat_expired: bool | None = None
     raw_data: dict[str, Any] = field(default_factory=dict)
     _client: Any = field(default=None, repr=False)
+
+    @property
+    def is_online(self) -> bool | None:
+        """True when Crow Cloud reports the panel as ONLINE."""
+        if self.state is None:
+            return None
+        return str(self.state).upper() == "ONLINE"
 
     @classmethod
     def from_api(cls, data: dict[str, Any], client: Any = None) -> "Panel":
@@ -418,6 +536,8 @@ class Panel:
             firmware_version=data.get("version"),
             latitude=data.get("latitude"),
             longitude=data.get("longitude"),
+            last_report_heartbeat=_parse_utc(data.get("last_report_heartbeat")),
+            report_heartbeat_expired=data.get("report_heartbeat_expired"),
             raw_data=data,
             _client=client,
         )
@@ -514,3 +634,52 @@ class Panel:
     async def get_picture_bytes(self, picture: "Picture") -> bytes:
         """Fetch a picture as raw JPEG bytes (for HA camera entities)."""
         return await self._require_client().get_picture_bytes(picture)
+
+    # ------------------------------------------------------------------
+    # Connectivity
+    # ------------------------------------------------------------------
+
+    async def refresh(self) -> None:
+        """Re-fetch the panel and update its status fields in place.
+
+        Credentials such as user_code are left untouched so a code set by
+        the caller is not overwritten.
+        """
+        fresh = await self._require_client().get_panel(self.mac)
+        self.name = fresh.name
+        self.state = fresh.state
+        self.state_full = fresh.state_full
+        self.firmware_version = fresh.firmware_version
+        self.last_report_heartbeat = fresh.last_report_heartbeat
+        self.report_heartbeat_expired = fresh.report_heartbeat_expired
+        self.raw_data = fresh.raw_data
+
+    def _module_kwargs(self) -> dict[str, Any]:
+        return {
+            "remote_password": self.remote_access_password,
+            "user_code": self.user_code,
+        }
+
+    async def get_connection(self) -> ConnectionInfo:
+        """Fetch the current cloud connection state and interface."""
+        return await self._require_client().get_connection(
+            self.id, **self._module_kwargs()
+        )
+
+    async def get_wifi_info(self) -> WifiInfo:
+        """Fetch Wi-Fi module state."""
+        return await self._require_client().get_wifi_info(
+            self.id, **self._module_kwargs()
+        )
+
+    async def get_gsm_info(self) -> GsmInfo:
+        """Fetch GSM module state."""
+        return await self._require_client().get_gsm_info(
+            self.id, **self._module_kwargs()
+        )
+
+    async def get_radio_info(self) -> RadioInfo:
+        """Fetch wireless radio module state."""
+        return await self._require_client().get_radio_info(
+            self.id, **self._module_kwargs()
+        )

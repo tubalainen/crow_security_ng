@@ -411,3 +411,97 @@ class TestPictures:
                 await client.download_picture(pic, str(out))
 
         assert out.read_bytes() == b"\xff\xd8\xff\xe0"
+
+
+# ---------------------------------------------------------------------------
+# Connectivity
+# ---------------------------------------------------------------------------
+
+CONNECTION_DATA = {"interface": 1, "connected": True}
+WIFI_DATA = {
+    "id": "wifi", "enabled": False, "ssid": "", "rssi": 0, "wifi_rssi": 0,
+    "ip": "192.168.1.100", "mac": "AABBCCDDEEFF",
+}
+GSM_DATA = {
+    "id": "gsm", "enabled": True, "status": 4, "status_desc": "Sim Not Inserted",
+    "rssi": 0, "mobile_rssi": 0, "provider": "", "roaming": False,
+    "imei": "000000000000000",
+}
+RADIO_DATA = {
+    "id": "radio", "failure": False, "software_version": "0.30",
+    "hardware_version": "0.01",
+}
+
+
+class TestConnectivity:
+    @pytest.mark.asyncio
+    async def test_get_connection(self):
+        from crow_security_ng.models import ConnectionInterface
+
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.get(f"{BASE_URL}/panels/42/connection/", payload=CONNECTION_DATA)
+                info = await client.get_connection(42, remote_password="rem-pass")
+
+        assert info.connected is True
+        assert info.interface is ConnectionInterface.ETHERNET
+
+    @pytest.mark.asyncio
+    async def test_unknown_interface_kept_as_int(self):
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.get(
+                    f"{BASE_URL}/panels/42/connection/",
+                    payload={"interface": 7, "connected": False},
+                )
+                info = await client.get_connection(42)
+
+        assert info.interface == 7
+        assert info.connected is False
+
+    @pytest.mark.asyncio
+    async def test_module_info(self):
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.get(f"{BASE_URL}/panels/42/module/wifi/info/", payload=WIFI_DATA)
+                m.get(f"{BASE_URL}/panels/42/module/gsm/info/", payload=GSM_DATA)
+                m.get(f"{BASE_URL}/panels/42/module/radio/info/", payload=RADIO_DATA)
+                wifi = await client.get_wifi_info(42)
+                gsm = await client.get_gsm_info(42)
+                radio = await client.get_radio_info(42)
+
+        assert wifi.enabled is False and wifi.rssi == 0
+        assert gsm.enabled is True
+        assert gsm.status == 4
+        assert gsm.status_desc == "Sim Not Inserted"
+        assert gsm.provider is None
+        assert not hasattr(gsm, "imei")
+        assert radio.failure is False and radio.software_version == "0.30"
+
+    @pytest.mark.asyncio
+    async def test_panel_refresh_keeps_user_code(self):
+        online = {
+            **PANEL_DATA,
+            "state": "ONLINE",
+            "last_report_heartbeat": "2026-01-01T12:00:00",
+            "report_heartbeat_expired": False,
+        }
+        offline = {**online, "state": "OFFLINE", "user_code": "9999"}
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.get(_panel_url("aabbccddeeff"), payload=online)
+                m.get(_panel_url("aabbccddeeff"), payload=offline)
+                panel = await client.get_panel("aabbccddeeff")
+                panel.user_code = "1234"
+                assert panel.is_online is True
+                await panel.refresh()
+
+        assert panel.is_online is False
+        assert panel.user_code == "1234"
+        assert panel.last_report_heartbeat is not None
+        assert panel.last_report_heartbeat.tzinfo is not None
+        assert panel.last_report_heartbeat.hour == 12
