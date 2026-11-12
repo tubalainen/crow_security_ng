@@ -282,14 +282,14 @@ class TestPanel:
     def test_from_api_basic(self):
         data = {
             "id": 42,
-            "mac": "0013a1250a45",
+            "mac": "aabbccddeeff",
             "name": "My Alarm",
             "remote_access_password": "secret",
         }
         panel = Panel.from_api(data)
 
         assert panel.id == 42
-        assert panel.mac == "0013a1250a45"
+        assert panel.mac == "aabbccddeeff"
         assert panel.name == "My Alarm"
         assert panel.remote_access_password == "secret"
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -28,6 +29,17 @@ from .models import Area, Measurement, Output, Panel, Picture, Zone
 from .utils import normalize_mac
 
 _LOGGER = logging.getLogger(__name__)
+
+# Refresh this many seconds before the access token's reported expiry.
+_TOKEN_EXPIRY_MARGIN = 300
+
+_AUTH_403_MARKERS = ("csrf", "authentication credentials", "token")
+
+
+def _is_auth_403(text: str) -> bool:
+    """Return True if a 403 body means the request was not token-authenticated."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in _AUTH_403_MARKERS)
 
 
 def _control_headers(
@@ -68,7 +80,7 @@ class CrowClient:
 
         async with CrowClient("email@example.com", "password") as client:
             panels = await client.get_panels()
-            panel  = await client.get_panel("0013A1250A45")
+            panel  = await client.get_panel("AABBCCDDEEFF")
             areas  = await client.get_areas(panel.id)
     """
 
@@ -91,6 +103,7 @@ class CrowClient:
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self._token_type: str = "Bearer"
+        self._token_expires_at: float | None = None
 
     # ------------------------------------------------------------------
     # Session management
@@ -98,7 +111,13 @@ class CrowClient:
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None:
-            self._session = aiohttp.ClientSession(timeout=self._timeout)
+            # The API is token-only. Keeping server cookies lets an expired
+            # token fall back to Django session auth, which then rejects
+            # PATCH/POST with "CSRF Failed: CSRF cookie not set."
+            self._session = aiohttp.ClientSession(
+                timeout=self._timeout,
+                cookie_jar=aiohttp.DummyCookieJar(),
+            )
         return self._session
 
     async def close(self) -> None:
@@ -144,9 +163,10 @@ class CrowClient:
                     )
                 resp.raise_for_status()
                 result = await resp.json()
-                self._access_token = result["access_token"]
-                self._refresh_token = result.get("refresh_token")
-                self._token_type = result.get("token_type", "Bearer")
+                self._access_token = None
+                self._refresh_token = None
+                self._token_type = "Bearer"
+                self._store_token(result)
                 _LOGGER.debug("Login successful, token_type=%s", self._token_type)
         except aiohttp.ServerTimeoutError as exc:
             raise TimeoutError("Login request timed out") from exc
@@ -176,11 +196,33 @@ class CrowClient:
                     return
                 resp.raise_for_status()
                 result = await resp.json()
-                self._access_token = result["access_token"]
-                self._refresh_token = result.get("refresh_token", self._refresh_token)
-                self._token_type = result.get("token_type", self._token_type)
+                self._store_token(result)
         except aiohttp.ClientError:
             await self.login()
+
+    def _store_token(self, result: dict[str, Any]) -> None:
+        """Store tokens from a /o/token/ response, keeping unset fields."""
+        self._access_token = result["access_token"]
+        self._refresh_token = result.get("refresh_token", self._refresh_token)
+        self._token_type = result.get("token_type", self._token_type)
+        expires_in = result.get("expires_in")
+        self._token_expires_at = (
+            time.monotonic() + float(expires_in) if expires_in else None
+        )
+
+    def _token_expiring(self) -> bool:
+        return (
+            self._token_expires_at is not None
+            and time.monotonic() >= self._token_expires_at - _TOKEN_EXPIRY_MARGIN
+        )
+
+    async def _ensure_token(self) -> None:
+        """Log in if there is no token, or refresh one that is about to expire."""
+        if not self._access_token:
+            await self.login()
+        elif self._token_expiring():
+            _LOGGER.debug("Access token is about to expire, refreshing")
+            await self._refresh()
 
     def _auth_headers(self) -> dict[str, str]:
         return {
@@ -202,8 +244,7 @@ class CrowClient:
         **kwargs: Any,
     ) -> Any:
         """Make an authenticated request with automatic token refresh."""
-        if not self._access_token:
-            await self.login()
+        await self._ensure_token()
 
         headers = self._auth_headers()
         if extra_headers:
@@ -222,6 +263,22 @@ class CrowClient:
                     return await self._request(
                         method, path, retry=False,
                         extra_headers=extra_headers, **kwargs
+                    )
+                if resp.status == 403 and retry:
+                    text = await resp.text()
+                    if _is_auth_403(text):
+                        _LOGGER.debug(
+                            "Got 403 (%s), refreshing token and retrying", text[:100]
+                        )
+                        await self._refresh()
+                        return await self._request(
+                            method, path, retry=False,
+                            extra_headers=extra_headers, **kwargs
+                        )
+                    raise ResponseError(
+                        f"API error: {text[:200]}",
+                        status_code=403,
+                        response_text=text,
                     )
                 if resp.status == 429:
                     retry_after_raw = resp.headers.get("Retry-After")
@@ -523,8 +580,7 @@ class CrowClient:
         Reconnection is left to the caller (e.g. HA's async_track_time_interval
         or a retry loop).
         """
-        if not self._access_token:
-            await self.login()
+        await self._ensure_token()
 
         normalized = normalize_mac(mac)
         ws_url = f"{self._ws_base}/sockjs/websocket"
