@@ -167,7 +167,20 @@ panel.name
 panel.remote_access_password   # → X-Crow-CP-Remote header
 panel.user_code                # → X-Crow-CP-User header (may be None)
 panel.firmware_version
+panel.is_online                # True when Crow Cloud reports state "ONLINE"
+panel.last_report_heartbeat    # timezone-aware UTC datetime
+panel.report_heartbeat_expired
 ```
+
+Connectivity (read-only):
+```python
+await panel.refresh()                 # re-fetch status fields; keeps user_code
+conn = await panel.get_connection()   # conn.connected, conn.interface (ConnectionInterface.ETHERNET or raw int)
+wifi = await panel.get_wifi_info()    # wifi.enabled, wifi.rssi
+gsm = await panel.get_gsm_info()      # gsm.enabled, gsm.status, gsm.status_desc, gsm.rssi, gsm.provider, gsm.roaming
+radio = await panel.get_radio_info()  # radio.failure, radio.software_version, radio.hardware_version
+```
+IP addresses, MACs and the GSM IMEI are not exposed as fields; they remain in each object's `raw_data`.
 
 Panel also exposes convenience delegation methods:
 ```python
