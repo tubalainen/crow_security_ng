@@ -1,6 +1,7 @@
 """Tests for CrowClient using mocked HTTP responses."""
 import json
 
+import aiohttp
 import pytest
 from aioresponses import aioresponses
 
@@ -28,7 +29,7 @@ TOKEN_RESPONSE = {
 
 PANEL_DATA = {
     "id": 42,
-    "mac": "0013a1250a45",
+    "mac": "aabbccddeeff",
     "name": "My Alarm",
     "remote_access_password": "rem-pass",
     "user_code": None,
@@ -128,15 +129,15 @@ class TestGetPanels:
         assert len(panels) == 1
         assert isinstance(panels[0], Panel)
         assert panels[0].id == 42
-        assert panels[0].mac == "0013a1250a45"
+        assert panels[0].mac == "aabbccddeeff"
 
     @pytest.mark.asyncio
     async def test_get_panel_by_mac(self):
         async with CrowClient("user@example.com", "pass") as client:
             with aioresponses() as m:
                 m.post(_token_url(), payload=TOKEN_RESPONSE)
-                m.get(_panel_url("0013a1250a45"), payload=PANEL_DATA)
-                panel = await client.get_panel("0013a1250a45")
+                m.get(_panel_url("aabbccddeeff"), payload=PANEL_DATA)
+                panel = await client.get_panel("aabbccddeeff")
 
         assert isinstance(panel, Panel)
         assert panel.id == 42
@@ -150,10 +151,10 @@ class TestGetPanels:
             with aioresponses() as m:
                 m.post(_token_url(), payload=TOKEN_RESPONSE)
                 # The actual request should use the normalised (no-separator) form
-                m.get(_panel_url("0013a1250a45"), payload=PANEL_DATA)
-                panel = await client.get_panel("00:13:a1:25:0a:45")
+                m.get(_panel_url("aabbccddeeff"), payload=PANEL_DATA)
+                panel = await client.get_panel("aa:bb:cc:dd:ee:ff")
 
-        assert panel.mac == "0013a1250a45"
+        assert panel.mac == "aabbccddeeff"
 
     @pytest.mark.asyncio
     async def test_get_panel_not_found(self):
@@ -282,6 +283,74 @@ class TestTokenRefresh:
                 panels = await client.get_panels()
 
         assert len(panels) == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_and_retry_on_csrf_403(self):
+        """An expired token falling back to session auth gives a CSRF 403; refresh and retry."""
+        patched_area = {**AREA_DATA[0], "state": "armed"}
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.patch(
+                    _area_url(42, 1),
+                    status=403,
+                    payload={"detail": "CSRF Failed: CSRF cookie not set."},
+                )
+                m.post(_token_url(), payload={**TOKEN_RESPONSE, "access_token": "new"})
+                m.patch(_area_url(42, 1), payload=patched_area)
+                area = await client.set_area_state(42, 1, "arm")
+
+                assert client._access_token == "new"
+        assert area.state == AreaState.ARMED
+
+    @pytest.mark.asyncio
+    async def test_non_auth_403_is_not_retried(self):
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.patch(
+                    _area_url(42, 1),
+                    status=403,
+                    payload={"detail": "Wrong user code."},
+                )
+                with pytest.raises(ResponseError) as exc_info:
+                    await client.set_area_state(42, 1, "arm")
+
+                token_calls = [k for k in m.requests if k[0] == "POST"]
+                assert len(m.requests[token_calls[0]]) == 1
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_proactive_refresh_before_expiry(self):
+        """A token inside the expiry margin is refreshed before the request is sent."""
+        short_lived = {**TOKEN_RESPONSE, "expires_in": 60}
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=short_lived)
+                m.get(_panels_url(), payload=[PANEL_DATA])
+                m.post(_token_url(), payload={**TOKEN_RESPONSE, "access_token": "fresh"})
+                m.get(_panels_url(), payload=[PANEL_DATA])
+                await client.get_panels()
+                assert client._access_token == "test-access-token"
+                await client.get_panels()
+                assert client._access_token == "fresh"
+
+    @pytest.mark.asyncio
+    async def test_no_refresh_while_token_valid(self):
+        async with CrowClient("user@example.com", "pass") as client:
+            with aioresponses() as m:
+                m.post(_token_url(), payload=TOKEN_RESPONSE)
+                m.get(_panels_url(), payload=[PANEL_DATA], repeat=True)
+                await client.get_panels()
+                await client.get_panels()
+
+                token_calls = [k for k in m.requests if k[0] == "POST"]
+                assert len(m.requests[token_calls[0]]) == 1
+
+    @pytest.mark.asyncio
+    async def test_owned_session_does_not_store_cookies(self):
+        async with CrowClient("user@example.com", "pass") as client:
+            assert isinstance(client._get_session().cookie_jar, aiohttp.DummyCookieJar)
 
 
 # ---------------------------------------------------------------------------

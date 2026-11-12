@@ -14,7 +14,7 @@ through the Crow Cloud API at `api.crowcloud.xyz`.
 - **MAC address normalization** — accepts any MAC format (with/without separators)
 - **WebSocket support** — real-time updates from your alarm panel
 - **Backwards compatible** — provides a `Session` class compatible with the original `crow_security`
-- **Token refresh** — automatic OAuth2 token refresh with fallback to full re-login
+- **Token refresh** — refreshes the OAuth2 token before it expires, and again if the API rejects it, falling back to a full re-login
 - **Context managers** — proper resource cleanup with async context managers
 
 ## Installation
@@ -31,7 +31,9 @@ The library uses **OAuth2 Resource Owner Password Credentials** (ROPC) against
 email and password.
 
 The access token is sent as `Authorization: Bearer {token}` on every request.
-The library refreshes expired tokens automatically.
+The library refreshes the token shortly before it expires (based on `expires_in`) and retries once if a request is rejected with 401, or with a 403 that indicates an authentication or CSRF problem.
+
+The client's own HTTP session does not store cookies. The API is token-only, and stored server cookies can make an expired token fall back to session authentication, which rejects arm/disarm and other write requests with `CSRF Failed: CSRF cookie not set.`. If you pass in your own `aiohttp.ClientSession`, consider creating it with `cookie_jar=aiohttp.DummyCookieJar()`.
 
 ## Quick Start
 
@@ -273,7 +275,7 @@ session = Session(email, password)
 | `Zone.state` | Mixed | `bool` (True = open) |
 | Exceptions | `CrowLoginError`, `ResponseError` | Richer hierarchy |
 | Type hints | None | Full Python 3.10+ annotations |
-| Token refresh | Manual | Automatic on 401 |
+| Token refresh | Manual | Automatic, before expiry and on 401/auth 403 |
 | Context manager | Partial (bug in `__aexit__`) | Full async context manager |
 | Python version | 3.2+ | 3.10+ |
 
