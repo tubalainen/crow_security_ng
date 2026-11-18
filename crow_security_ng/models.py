@@ -115,6 +115,7 @@ class Zone:
     zone_type: int = 0          # numeric zone type (55 = smart cam)
     active: bool = False
     rssi: int | None = None
+    temperature: float | None = None  # °C  (from zones endpoint, None if not reported)
     raw_data: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -146,6 +147,7 @@ class Zone:
             zone_type=int(data.get("zone_type", 0) or 0),
             active=data.get("active", False) or False,
             rssi=data.get("rssi"),
+            temperature=float(data["temperature"]) if data.get("temperature") is not None else None,
             raw_data=data,
         )
 

@@ -103,6 +103,18 @@ class TestZone:
         zone = Zone.from_api({"id": 12, "name": "T"})
         assert zone.battery_voltage is None
 
+    def test_temperature_parsed(self):
+        zone = Zone.from_api({"id": 13, "name": "Hall", "temperature": 21})
+        assert zone.temperature == pytest.approx(21.0)
+
+    def test_temperature_float(self):
+        zone = Zone.from_api({"id": 14, "name": "Hall", "temperature": 20.5})
+        assert zone.temperature == pytest.approx(20.5)
+
+    def test_temperature_absent_is_none(self):
+        zone = Zone.from_api({"id": 15, "name": "T"})
+        assert zone.temperature is None
+
 
 # ---------------------------------------------------------------------------
 # Area
